@@ -1,0 +1,2 @@
+# Vercel Python serverless functions use only the standard library here,
+# so no third-party packages are required for /api/chain.
