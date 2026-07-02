@@ -47,6 +47,10 @@
         <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
         <span id="statusText" class="text-slate-500 text-xs">Offline</span>
       </div>
+      <button id="restartBtn" onclick="restartConnection()" title="Restart live feed"
+        class="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-sm font-semibold w-9 h-9 flex items-center justify-center rounded-lg border border-slate-700 shadow transition">
+        &#8635;
+      </button>
       <button id="connectBtn" onclick="toggleConnection()"
         class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow transition">
         Start Live Data
@@ -212,8 +216,8 @@ function addWatchlistItem(sym) {
   selectSymbol(sym);
   highlightChip(sym);
 
-  if (connected || IS_REMOTE) fetchChain(sym);
-  else toast(`${sym} added — start live data to fetch chain`, 'warn');
+  if (connected) startPolling(sym);
+  else { fetchChain(sym); toast(`${sym} added — click "Start Live Data" for continuous updates`, 'warn'); }
 }
 
 function removeWatchlistItem(sym, e) {
@@ -305,17 +309,47 @@ function setConnStatus(kind) {
   }
 }
 
+function connectLive() {
+  connected = true;
+  setConnStatus('live');
+  startAllPolling();
+  toast(watchlist.size ? 'Live feed connected' : 'Connected — add stocks to monitor', 'success');
+}
+
+function disconnectLive() {
+  connected = false;
+  stopAllPolling();
+  setConnStatus('offline');
+  markCardsPaused();
+  toast('Live feed disconnected', 'warn');
+}
+
 function toggleConnection() {
-  if (connected) {
-    connected = false;
-    stopAllPolling();
-    setConnStatus('offline');
-  } else {
+  if (connected) disconnectLive();
+  else connectLive();
+}
+
+// Full restart: tear everything down and reconnect from scratch.
+// Handy after refreshing the daily Upstox token or if the feed stalls.
+function restartConnection() {
+  stopAllPolling();
+  connected = false;
+  setConnStatus('offline');
+  // brief tick so the status visibly resets, then reconnect
+  setTimeout(() => {
     connected = true;
     setConnStatus('live');
     startAllPolling();
-    if (!watchlist.size) toast('Add stocks to start monitoring', 'info');
-  }
+    toast('Live feed restarted', 'success');
+  }, 300);
+}
+
+// Dim the change indicators on cards when paused (data is stale, not live).
+function markCardsPaused() {
+  document.querySelectorAll('#watchlistCards > div').forEach(c => c.classList.add('opacity-70'));
+}
+function clearCardsPaused() {
+  document.querySelectorAll('#watchlistCards > div').forEach(c => c.classList.remove('opacity-70'));
 }
 
 // ========================= RENDER: WATCHLIST CARDS =========================
@@ -506,8 +540,12 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 // ========================= INIT =========================
 renderCards();
 if (IS_REMOTE) {
+  // Deployed: auto-connect and begin polling any watched symbols immediately.
   connected = true;
   setConnStatus('live');
+  startAllPolling();
+} else {
+  setConnStatus('offline');
 }
 </script>
 </body>
