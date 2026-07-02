@@ -708,10 +708,18 @@ function updateQuadPane(i) {
   chart.innerHTML = quadChainTable(d);
   if (prevSym !== sym) {
     pane.dataset.cursym = sym;
-    const atmRow = chart.querySelector('[data-atm="1"]');
-    if (atmRow) atmRow.scrollIntoView({ block: 'center' });
+    // Center the ATM row within the chart's own scroll box (not the page).
+    // Deferred to the next frame so the freshly-rendered rows are laid out
+    // and getBoundingClientRect returns real positions.
+    requestAnimationFrame(() => {
+      const atmRow = chart.querySelector('[data-atm="1"]');
+      if (!atmRow) return;
+      const cRect = chart.getBoundingClientRect();
+      const rRect = atmRow.getBoundingClientRect();
+      chart.scrollTop += (rRect.top - cRect.top) - (chart.clientHeight - rRect.height) / 2;
+    });
   } else {
-    chart.scrollTop = prevScroll;
+    chart.scrollTop = prevScroll;   // keep the user's scroll on live updates
   }
 }
 
