@@ -52,12 +52,41 @@ _GOOD_TTL = 90.0        # serve stale-but-good data up to this long on failure
 _META_CACHE = {}
 _META_TTL = 1800.0      # 30 min
 
-# Fast-path map for common indices (search also works, this just saves a call).
+# Fast-path map: symbol -> Upstox instrument_key. Indices AND common F&O stocks
+# are hardcoded so we skip the /instruments/search endpoint entirely — that
+# endpoint is aggressively rate-limited (HTTP 429), and since a failed search
+# never caches, stocks would otherwise re-search every poll and stay broken.
+# Equity keys are "NSE_EQ|<ISIN>".
 SYMBOL_TO_INSTRUMENT = {
+    # Indices
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
     "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
     "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
+    "NIFTYNXT50": "NSE_INDEX|Nifty Next 50",
+    # F&O stocks (NSE_EQ|ISIN)
+    "RELIANCE": "NSE_EQ|INE002A01018",
+    "TCS": "NSE_EQ|INE467B01029",
+    "HDFCBANK": "NSE_EQ|INE040A01034",
+    "INFY": "NSE_EQ|INE009A01021",
+    "ICICIBANK": "NSE_EQ|INE090A01021",
+    "SBIN": "NSE_EQ|INE062A01020",
+    "ITC": "NSE_EQ|INE154A01025",
+    "AXISBANK": "NSE_EQ|INE238A01034",
+    "KOTAKBANK": "NSE_EQ|INE237A01028",
+    "LT": "NSE_EQ|INE018A01030",
+    "HINDUNILVR": "NSE_EQ|INE030A01027",
+    "BHARTIARTL": "NSE_EQ|INE397D01024",
+    "MARUTI": "NSE_EQ|INE585B01010",
+    "SUNPHARMA": "NSE_EQ|INE044A01036",
+    "TATAMOTORS": "NSE_EQ|INE155A01022",
+    "TATASTEEL": "NSE_EQ|INE081A01020",
+    "WIPRO": "NSE_EQ|INE075A01022",
+    "HCLTECH": "NSE_EQ|INE860A01027",
+    "BAJFINANCE": "NSE_EQ|INE296A01024",
+    "CIPLA": "NSE_EQ|INE059A01026",
+    "ZOMATO": "NSE_EQ|INE758T01015",
+    "ETERNAL": "NSE_EQ|INE758T01015",
 }
 
 
