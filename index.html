@@ -100,6 +100,24 @@
     <!-- cards injected -->
   </section>
 
+  <!-- ===== VIEW TOGGLE (Single / Quad) ===== -->
+  <div id="viewToolbar" class="hidden items-center justify-between mb-3">
+    <div class="text-xs uppercase tracking-wider text-slate-500 font-medium">Option Chains</div>
+    <div class="inline-flex bg-slate-800 border border-slate-700 rounded-lg p-1 gap-1">
+      <button id="viewSingleBtn" onclick="setViewMode('single')"
+        class="text-xs font-semibold px-3 py-1.5 rounded-md transition">Single</button>
+      <button id="viewQuadBtn" onclick="setViewMode('quad')"
+        class="text-xs font-semibold px-3 py-1.5 rounded-md transition">Quad &middot; 4</button>
+    </div>
+  </div>
+
+  <!-- ===== QUAD (2x2) MULTI-CHAIN VIEW ===== -->
+  <section id="quadPanel" class="hidden fade-in mb-6">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <!-- 4 chain panels injected -->
+    </div>
+  </section>
+
   <!-- ===== SELECTED STOCK DETAIL ===== -->
   <section id="detailPanel" class="hidden fade-in">
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -189,6 +207,11 @@ let pollTimers = {};
 let ws = null;
 let connected = false;
 
+// View mode: 'single' = one detailed chain; 'quad' = 2x2 grid of 4 chains.
+let viewMode = 'single';
+let quadSlots = [null, null, null, null];   // which symbol each of the 4 panes shows
+let quadMembershipSig = '';                  // to know when to rebuild the pane shells
+
 const fmt = v => Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtOI = v => {
   v = Number(v||0);
@@ -232,13 +255,26 @@ function removeWatchlistItem(sym, e) {
   watchlist.delete(sym);
   if (pollTimers[sym]) { clearInterval(pollTimers[sym]); delete pollTimers[sym]; }
   if (selectedSymbol === sym) { selectedSymbol = null; hideDetail(); }
+  quadSlots = quadSlots.map(s => s === sym ? null : s);   // free any quad pane
+  quadMembershipSig = '';
   renderCards();
+  if (viewMode === 'quad') renderQuad();
   unhighlightChip(sym);
   if (!watchlist.size) document.getElementById('emptyState').classList.remove('hidden');
 }
 
 function selectSymbol(sym) {
   selectedSymbol = sym;
+  if (viewMode === 'quad') {
+    // In quad mode, clicking a card drops it into the first empty pane.
+    if (!quadSlots.includes(sym)) {
+      let idx = quadSlots.findIndex(s => !s || !watchlist.has(s));
+      if (idx !== -1) { quadSlots[idx] = sym; quadMembershipSig = ''; }
+    }
+    renderCards();
+    renderQuad();
+    return;
+  }
   customStrikes = [];
   renderCards();
   renderDetail();
@@ -264,8 +300,7 @@ async function fetchChain(sym, expiry) {
       // API-level error (e.g. token expired) — always surface it.
       entry.error = data.message || 'API error';
       entry.loading = false;
-      renderCards();
-      if (selectedSymbol === sym) renderDetail();
+      onDataUpdated(sym);
       return;
     }
     if (data.type === 'chain') {
@@ -277,8 +312,7 @@ async function fetchChain(sym, expiry) {
       entry.cashOnly = !!data.cash_only;
       entry.loading = false;
       entry.error = null;
-      renderCards();
-      if (selectedSymbol === sym) renderDetail();
+      onDataUpdated(sym);
     }
   } catch (e) {
     // Network hiccup on a refresh: keep the last good data instead of wiping
@@ -288,9 +322,18 @@ async function fetchChain(sym, expiry) {
         ? 'Cannot reach /api/chain — is UPSTOX_ACCESS_TOKEN set?'
         : `Cannot reach live API (${PROD_API})`;
       entry.loading = false;
-      renderCards();
-      if (selectedSymbol === sym) renderDetail();
+      onDataUpdated(sym);
     }
+  }
+}
+
+// Push fresh data into the cards plus whichever chain view is active.
+function onDataUpdated(sym) {
+  renderCards();
+  if (viewMode === 'single') {
+    if (selectedSymbol === sym) renderDetail();
+  } else {
+    updateQuadPanesFor(sym);
   }
 }
 
@@ -401,6 +444,8 @@ function renderCards() {
     }
     updateCard(el, sym, d);
   });
+
+  updateViewToolbar();
 }
 
 // Update one card's dynamic content in place — no element recreation, so no
@@ -436,6 +481,156 @@ function updateCard(el, sym, d) {
         `<span title="Max Put OI">P: ${fmtOI(maxPutOI)}</span>` +
         `<span title="Total strikes">${d.rows.length} stk</span></div>`
       : '');
+}
+
+// ========================= VIEW MODE (Single / Quad) =========================
+function updateViewToolbar() {
+  const bar = document.getElementById('viewToolbar');
+  const show = watchlist.size > 0;
+  bar.classList.toggle('hidden', !show);
+  bar.classList.toggle('flex', show);
+
+  const active = ' bg-indigo-600 text-white';
+  const idle = ' text-slate-400 hover:text-white';
+  const base = 'text-xs font-semibold px-3 py-1.5 rounded-md transition';
+  document.getElementById('viewSingleBtn').className = base + (viewMode === 'single' ? active : idle);
+  document.getElementById('viewQuadBtn').className   = base + (viewMode === 'quad'   ? active : idle);
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  const wl = [...watchlist.keys()];
+
+  if (mode === 'quad') {
+    // Keep valid slots; auto-fill the rest from the watchlist order.
+    quadSlots = quadSlots.map(s => (s && watchlist.has(s)) ? s : null);
+    for (let i = 0; i < 4; i++) {
+      if (!quadSlots[i]) quadSlots[i] = wl.find(s => !quadSlots.includes(s)) || null;
+    }
+    quadMembershipSig = '';
+  }
+
+  document.getElementById('quadPanel').classList.toggle('hidden', mode !== 'quad');
+  document.getElementById('detailPanel').classList.toggle(
+    'hidden', mode !== 'single' || !selectedSymbol || !watchlist.has(selectedSymbol));
+
+  updateViewToolbar();
+  if (mode === 'quad') renderQuad();
+  else renderDetail();
+}
+
+// ========================= RENDER: QUAD (2x2) VIEW =========================
+function quadSig() {
+  return [...watchlist.keys()].join(',') + '|' + quadSlots.join(',');
+}
+
+function renderQuad() {
+  const grid = document.querySelector('#quadPanel > div');
+  const sig = quadSig();
+  if (sig !== quadMembershipSig) {           // membership or slot assignment changed
+    quadMembershipSig = sig;
+    grid.innerHTML = '';
+    for (let i = 0; i < 4; i++) grid.appendChild(buildQuadPane(i));
+  }
+  for (let i = 0; i < 4; i++) updateQuadPane(i);
+}
+
+function buildQuadPane(i) {
+  const pane = document.createElement('div');
+  pane.setAttribute('data-slot', i);
+  pane.className = 'bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col';
+
+  const wl = [...watchlist.keys()];
+  const opts = ['<option value="">— select stock —</option>']
+    .concat(wl.map(s => `<option value="${s}" ${s === quadSlots[i] ? 'selected' : ''}>${s}</option>`))
+    .join('');
+
+  pane.innerHTML =
+    `<div class="flex items-center justify-between gap-2 p-2.5 border-b border-slate-800">
+       <div class="flex items-baseline gap-2 min-w-0">
+         <select data-role="pick" class="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs font-semibold focus:outline-none focus:border-indigo-500">${opts}</select>
+         <span data-role="spot" class="text-sm font-bold tabular-nums text-slate-300 truncate"></span>
+       </div>
+       <span data-role="exp" class="text-[10px] text-slate-500 whitespace-nowrap"></span>
+     </div>
+     <div data-role="chart" class="overflow-y-auto" style="max-height:340px;"></div>`;
+
+  pane.querySelector('[data-role="pick"]').onchange = (e) => {
+    quadSlots[i] = e.target.value || null;
+    quadMembershipSig = '';       // rebuild so the other panes' <select> selected-state stays correct
+    renderQuad();
+  };
+  return pane;
+}
+
+function updateQuadPane(i) {
+  const pane = document.querySelector(`#quadPanel [data-slot="${i}"]`);
+  if (!pane) return;
+  const sym = quadSlots[i];
+  const spotEl = pane.querySelector('[data-role="spot"]');
+  const expEl = pane.querySelector('[data-role="exp"]');
+  const chart = pane.querySelector('[data-role="chart"]');
+
+  if (!sym || !watchlist.has(sym)) {
+    spotEl.textContent = '';
+    expEl.textContent = '';
+    chart.innerHTML = '<div class="py-12 text-center text-slate-600 text-xs">Pick a stock to show its chain</div>';
+    return;
+  }
+
+  const d = watchlist.get(sym);
+  spotEl.textContent = d.spot ? fmt(d.spot) : (d.loading ? 'Loading…' : '');
+  spotEl.className = 'text-sm font-bold tabular-nums truncate ' +
+    ((d.lastSpot && d.spot && d.spot < d.lastSpot) ? 'text-rose-400' : 'text-emerald-400');
+  expEl.textContent = d.expiry || '';
+  chart.innerHTML = quadChainTable(d);
+}
+
+function updateQuadPanesFor(sym) {
+  if (viewMode !== 'quad') return;
+  for (let i = 0; i < 4; i++) if (quadSlots[i] === sym) updateQuadPane(i);
+}
+
+// Compact chain table (windowed around ATM) for a quad pane.
+function quadChainTable(d) {
+  const spot = d.spot || 0;
+  const all = d.rows || [];
+  if (!all.length) {
+    return `<div class="py-12 text-center text-slate-600 text-xs">${d.error || (d.loading ? 'Loading…' : 'No data')}</div>`;
+  }
+  let atmIdx = 0, best = Infinity;
+  all.forEach((r, i) => { const df = Math.abs((r.strike || 0) - spot); if (df < best) { best = df; atmIdx = i; } });
+  const lo = Math.max(0, atmIdx - 8), hi = Math.min(all.length, atmIdx + 9);
+  const rows = all.slice(lo, hi);
+  const atmStrike = all[atmIdx] ? all[atmIdx].strike : null;
+
+  const head =
+    `<table class="w-full text-xs">
+       <thead class="sticky top-0 bg-slate-950/90 backdrop-blur z-10">
+         <tr class="text-[10px] uppercase tracking-wider text-slate-600">
+           <th class="py-1.5 px-2 text-right">C-OI</th>
+           <th class="py-1.5 px-2 text-right text-emerald-500">C-LTP</th>
+           <th class="py-1.5 px-2 text-center border-x border-slate-700 bg-slate-950/80">Strike</th>
+           <th class="py-1.5 px-2 text-left text-rose-500">P-LTP</th>
+           <th class="py-1.5 px-2 text-left">P-OI</th>
+         </tr>
+       </thead><tbody>`;
+
+  const body = rows.map(r => {
+    const c = r.call || {}, p = r.put || {};
+    const callITM = spot > r.strike, putITM = r.strike > spot, isATM = r.strike === atmStrike;
+    const callBg = callITM ? 'bg-emerald-950/30' : '', putBg = putITM ? 'bg-rose-950/30' : '';
+    const rowBorder = isATM ? 'border-y border-indigo-500/40' : 'border-b border-slate-800/50';
+    return `<tr class="${rowBorder}">
+      <td class="py-1.5 px-2 text-right tabular-nums ${callBg} text-slate-500">${fmtOI(c.oi)}</td>
+      <td class="py-1.5 px-2 text-right tabular-nums font-semibold ${callBg} ${callITM ? 'text-emerald-400' : 'text-slate-400'}">${fmt(c.ltp)}</td>
+      <td class="py-1.5 px-2 text-center font-bold tabular-nums bg-slate-950/50 border-x border-slate-700/50 ${isATM ? 'text-indigo-400' : 'text-slate-300'}">${r.strike}</td>
+      <td class="py-1.5 px-2 text-left tabular-nums font-semibold ${putBg} ${putITM ? 'text-rose-400' : 'text-slate-400'}">${fmt(p.ltp)}</td>
+      <td class="py-1.5 px-2 text-left tabular-nums ${putBg} text-slate-500">${fmtOI(p.oi)}</td>
+    </tr>`;
+  }).join('');
+
+  return head + body + '</tbody></table>';
 }
 
 // ========================= RENDER: DETAIL PANEL =========================
@@ -584,6 +779,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 
 // ========================= INIT =========================
 renderCards();
+updateViewToolbar();
 // A live API is always reachable now (relative when deployed, PROD_API when
 // running locally), so auto-connect and begin polling any watched symbols.
 connected = true;
