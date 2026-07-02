@@ -100,16 +100,36 @@
     <!-- cards injected -->
   </section>
 
-  <!-- ===== VIEW TOGGLE (Single / Quad) ===== -->
+  <!-- ===== VIEW TOGGLE (Single / Quad / Screener) ===== -->
   <div id="viewToolbar" class="hidden items-center justify-between mb-3">
-    <div class="text-xs uppercase tracking-wider text-slate-500 font-medium">Option Chains</div>
+    <div class="text-xs uppercase tracking-wider text-slate-500 font-medium">
+      <span id="viewToolbarTitle">Option Chains</span>
+      <span id="stockCount" class="ml-2 text-slate-600 normal-case"></span>
+    </div>
     <div class="inline-flex bg-slate-800 border border-slate-700 rounded-lg p-1 gap-1">
       <button id="viewSingleBtn" onclick="setViewMode('single')"
         class="text-xs font-semibold px-3 py-1.5 rounded-md transition">Single</button>
       <button id="viewQuadBtn" onclick="setViewMode('quad')"
         class="text-xs font-semibold px-3 py-1.5 rounded-md transition">Quad &middot; 4</button>
+      <button id="viewScreenerBtn" onclick="setViewMode('screener')"
+        class="text-xs font-semibold px-3 py-1.5 rounded-md transition">Screener</button>
     </div>
   </div>
+
+  <!-- ===== SCREENER (dense multi-stock table) ===== -->
+  <section id="screenerPanel" class="hidden fade-in mb-6">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm whitespace-nowrap">
+          <thead><tr id="screenerHead" class="bg-slate-950/60 text-[10px] uppercase tracking-wider text-slate-500"></tr></thead>
+          <tbody id="screenerBody"></tbody>
+        </table>
+      </div>
+      <div class="px-3 py-2 text-[10px] text-slate-600 border-t border-slate-800">
+        Click a row to open its full chain &middot; click a column header to sort
+      </div>
+    </div>
+  </section>
 
   <!-- ===== QUAD (2x2) MULTI-CHAIN VIEW ===== -->
   <section id="quadPanel" class="hidden fade-in mb-6">
@@ -209,10 +229,13 @@ let customStrikes = [];
 let ws = null;
 let connected = false;
 
-// View mode: 'single' = one detailed chain; 'quad' = 2x2 grid of 4 chains.
+// View mode: 'single' = one detailed chain; 'quad' = 2x2 grid of 4 chains;
+// 'screener' = dense table of every watched stock.
 let viewMode = 'single';
 let quadSlots = [null, null, null, null];   // which symbol each of the 4 panes shows
 let quadMembershipSig = '';                  // to know when to rebuild the pane shells
+let screenerSort = { key: 'symbol', dir: 1 };
+let screenerMembershipSig = '';
 
 const fmt = v => Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtOI = v => {
@@ -331,6 +354,7 @@ function removeWatchlistItem(sym, e) {
   quadMembershipSig = '';
   renderCards();
   if (viewMode === 'quad') renderQuad();
+  else if (viewMode === 'screener') renderScreener();
   unhighlightChip(sym);
   if (!watchlist.size) document.getElementById('emptyState').classList.remove('hidden');
 }
@@ -345,6 +369,12 @@ function selectSymbol(sym) {
     }
     renderCards();
     renderQuad();
+    return;
+  }
+  if (viewMode === 'screener') {
+    // Selection is only used to drill in; screener drives its own table.
+    renderCards();
+    renderScreener();
     return;
   }
   customStrikes = [];
@@ -405,8 +435,10 @@ function onDataUpdated(sym) {
   renderCards();
   if (viewMode === 'single') {
     if (selectedSymbol === sym) renderDetail();
-  } else {
+  } else if (viewMode === 'quad') {
     updateQuadPanesFor(sym);
+  } else if (viewMode === 'screener') {
+    updateScreenerRow(sym);
   }
 }
 
@@ -594,18 +626,24 @@ function updateCard(el, sym, d) {
       : '');
 }
 
-// ========================= VIEW MODE (Single / Quad) =========================
+// ========================= VIEW MODE (Single / Quad / Screener) =========================
 function updateViewToolbar() {
   const bar = document.getElementById('viewToolbar');
   const show = watchlist.size > 0;
   bar.classList.toggle('hidden', !show);
   bar.classList.toggle('flex', show);
 
+  document.getElementById('viewToolbarTitle').textContent =
+    viewMode === 'screener' ? 'Screener' : 'Option Chains';
+  document.getElementById('stockCount').textContent =
+    watchlist.size ? `${watchlist.size} stock${watchlist.size > 1 ? 's' : ''}` : '';
+
   const active = ' bg-indigo-600 text-white';
   const idle = ' text-slate-400 hover:text-white';
   const base = 'text-xs font-semibold px-3 py-1.5 rounded-md transition';
-  document.getElementById('viewSingleBtn').className = base + (viewMode === 'single' ? active : idle);
-  document.getElementById('viewQuadBtn').className   = base + (viewMode === 'quad'   ? active : idle);
+  document.getElementById('viewSingleBtn').className   = base + (viewMode === 'single'   ? active : idle);
+  document.getElementById('viewQuadBtn').className     = base + (viewMode === 'quad'     ? active : idle);
+  document.getElementById('viewScreenerBtn').className = base + (viewMode === 'screener' ? active : idle);
 }
 
 function setViewMode(mode) {
@@ -620,15 +658,126 @@ function setViewMode(mode) {
     }
     quadMembershipSig = '';
   }
+  if (mode === 'screener') screenerMembershipSig = '';
 
   document.getElementById('quadPanel').classList.toggle('hidden', mode !== 'quad');
+  document.getElementById('screenerPanel').classList.toggle('hidden', mode !== 'screener');
   document.getElementById('detailPanel').classList.toggle(
     'hidden', mode !== 'single' || !selectedSymbol || !watchlist.has(selectedSymbol));
 
   updateViewToolbar();
   if (mode === 'quad') renderQuad();
+  else if (mode === 'screener') renderScreener();
   else renderDetail();
   refreshActive();
+}
+
+// ========================= RENDER: SCREENER TABLE =========================
+const SCREENER_COLS = [
+  { key: 'symbol',      label: 'Symbol',    align: 'left'  },
+  { key: 'spot',        label: 'LTP',       align: 'right' },
+  { key: 'chgPct',      label: 'Chg%',      align: 'right' },
+  { key: 'pcr',         label: 'PCR',       align: 'right' },
+  { key: 'maxPain',     label: 'Max Pain',  align: 'right' },
+  { key: 'support',     label: 'Support',   align: 'right' },
+  { key: 'resistance',  label: 'Resist',    align: 'right' },
+  { key: 'totCall',     label: 'Call OI',   align: 'right' },
+  { key: 'totPut',      label: 'Put OI',    align: 'right' },
+  { key: 'straddle',    label: 'Straddle',  align: 'right' },
+  { key: 'expiry',      label: 'Expiry',    align: 'right' },
+];
+
+function screenerMetrics(sym) {
+  const d = watchlist.get(sym) || {};
+  const a = (d.rows && d.rows.length && !d.cashOnly) ? computeAnalytics(d) : null;
+  const chg = d.lastSpot && d.spot ? d.spot - d.lastSpot : 0;
+  const chgPct = d.lastSpot ? (chg / d.lastSpot) * 100 : 0;
+  return {
+    symbol: sym, loading: d.loading, error: d.error, cashOnly: d.cashOnly,
+    spot: d.spot || 0, chg, chgPct,
+    pcr: a ? a.pcr : null, maxPain: a ? a.maxPain : null,
+    support: a ? a.support : null, resistance: a ? a.resistance : null,
+    totCall: a ? a.totCall : null, totPut: a ? a.totPut : null,
+    straddle: a ? a.straddle : null, expiry: d.expiry || '',
+  };
+}
+
+function sortScreener(key) {
+  if (screenerSort.key === key) screenerSort.dir *= -1;
+  else screenerSort = { key, dir: 1 };
+  renderScreener(true);
+}
+
+function screenerSig() { return [...watchlist.keys()].join(',') + '|' + screenerSort.key + screenerSort.dir; }
+
+function renderScreener(force) {
+  const head = document.getElementById('screenerHead');
+  const body = document.getElementById('screenerBody');
+
+  // Header (with sort arrows) — rebuilt whenever sort changes.
+  head.innerHTML = SCREENER_COLS.map(c => {
+    const arrow = screenerSort.key === c.key ? (screenerSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    return `<th onclick="sortScreener('${c.key}')"
+      class="py-2.5 px-3 font-medium cursor-pointer hover:text-slate-300 select-none text-${c.align} ${screenerSort.key===c.key?'text-indigo-400':''}">${c.label}${arrow}</th>`;
+  }).join('');
+
+  const sig = screenerSig();
+  const rowsData = [...watchlist.keys()].map(screenerMetrics);
+  const { key, dir } = screenerSort;
+  rowsData.sort((a, b) => {
+    let x = a[key], y = b[key];
+    if (x == null) x = -Infinity; if (y == null) y = -Infinity;
+    if (typeof x === 'string' || typeof y === 'string') return String(x).localeCompare(String(y)) * dir;
+    return (x - y) * dir;
+  });
+
+  // Rebuild row order only when membership/sort changed; otherwise update in place.
+  if (force || sig !== screenerMembershipSig) {
+    screenerMembershipSig = sig;
+    body.innerHTML = rowsData.map(m =>
+      `<tr data-sym="${m.symbol}" onclick="openFromScreener('${m.symbol}')"
+        class="border-b border-slate-800/60 hover:bg-slate-800/40 cursor-pointer transition-colors">
+        ${SCREENER_COLS.map(c => `<td data-col="${c.key}" class="py-2 px-3 tabular-nums text-${c.align}"></td>`).join('')}
+      </tr>`).join('');
+  }
+  rowsData.forEach(m => fillScreenerRow(m));
+}
+
+function fillScreenerRow(m) {
+  const tr = document.querySelector(`#screenerBody tr[data-sym="${m.symbol}"]`);
+  if (!tr) return;
+  const set = (col, html, cls) => {
+    const td = tr.querySelector(`[data-col="${col}"]`);
+    if (!td) return;
+    td.innerHTML = html;
+    td.className = `py-2 px-3 tabular-nums text-${SCREENER_COLS.find(c => c.key === col).align} ${cls || ''}`;
+  };
+  const dash = '<span class="text-slate-600">—</span>';
+  const up = m.chg >= 0;
+
+  set('symbol', `<span class="font-bold text-white">${m.symbol}</span>` +
+    (m.cashOnly ? '<span class="ml-1 text-[9px] text-amber-500">CASH</span>' : ''), 'text-left');
+  set('spot', m.loading && !m.spot ? '<span class="text-slate-600">…</span>' : fmt(m.spot),
+    up ? 'text-emerald-400' : 'text-rose-400');
+  set('chgPct', m.spot ? `${up?'+':''}${m.chgPct.toFixed(2)}%` : dash, up ? 'text-emerald-500' : 'text-rose-500');
+  set('pcr', m.pcr == null ? dash : m.pcr.toFixed(2), m.pcr == null ? '' : (m.pcr >= 1 ? 'text-emerald-400' : 'text-rose-400'));
+  set('maxPain', m.maxPain == null ? dash : m.maxPain, 'text-indigo-400');
+  set('support', m.support == null ? dash : m.support, 'text-emerald-400');
+  set('resistance', m.resistance == null ? dash : m.resistance, 'text-rose-400');
+  set('totCall', m.totCall == null ? dash : fmtOI(m.totCall), 'text-slate-400');
+  set('totPut', m.totPut == null ? dash : fmtOI(m.totPut), 'text-slate-400');
+  set('straddle', m.straddle == null ? dash : fmt(m.straddle), 'text-amber-400');
+  set('expiry', m.expiry ? `<span class="text-[11px] text-slate-500">${m.expiry}</span>` : dash, '');
+}
+
+function updateScreenerRow(sym) {
+  if (viewMode === 'screener') fillScreenerRow(screenerMetrics(sym));
+}
+
+// Drill from the screener into a stock's full chain.
+function openFromScreener(sym) {
+  selectSymbol(sym);
+  setViewMode('single');
 }
 
 // ========================= RENDER: QUAD (2x2) VIEW =========================
