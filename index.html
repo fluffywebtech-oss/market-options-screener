@@ -58,6 +58,12 @@
     </div>
   </header>
 
+  <!-- ===== RATE-LIMIT BANNER ===== -->
+  <div id="rateBanner" class="hidden mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm px-4 py-2.5 flex items-center gap-2">
+    <span class="w-2 h-2 rounded-full bg-amber-400 dot-pulse"></span>
+    <span id="rateBannerText">Upstox rate limit hit — pausing requests to recover…</span>
+  </div>
+
   <!-- ===== ADD STOCKS BAR ===== -->
   <section class="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-5">
     <div class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
@@ -392,13 +398,16 @@ async function fetchChain(sym, expiry) {
     const data = await res.json();
 
     if (data.type === 'error') {
-      // API-level error (e.g. token expired) — always surface it.
-      entry.error = data.message || 'API error';
+      const rl = data.status === 429 || /too many/i.test(data.message || '');
+      if (rl) { rateLimitedUntil = Date.now() + BACKOFF_MS; updateRateBanner(); }
+      // Keep last-good data if we have it; only overwrite when we have nothing.
+      if (!entry.rows.length) entry.error = rl ? 'Rate limited' : (data.message || 'API error');
       entry.loading = false;
       onDataUpdated(sym);
       return;
     }
     if (data.type === 'chain') {
+      if (rateLimitedUntil) { rateLimitedUntil = 0; updateRateBanner(); }   // recovered
       entry.lastSpot = entry.spot || data.spot;
       entry.spot = data.spot || 0;
       entry.expiry = data.expiry || null;
@@ -451,6 +460,23 @@ const MAX_INFLIGHT = 3;   // cap concurrent requests so we never burst Upstox
 let fastTimer = null, bgTimer = null, bgIndex = 0;
 let inFlight = 0;        // live request count (maintained in fetchChain)
 
+// Adaptive backoff: when Upstox returns 429, stop hammering (which only keeps
+// the rate-limit window full) and probe occasionally until it clears.
+const BACKOFF_MS = 45000;   // pause length after a 429
+const PROBE_MS = 8000;      // during backoff, allow one probe this often
+let rateLimitedUntil = 0;
+let lastProbe = 0;
+
+function isRateLimited() { return Date.now() < rateLimitedUntil; }
+
+// May we fire a request now? During backoff, allow only a single periodic probe.
+function canFetch() {
+  const now = Date.now();
+  if (now >= rateLimitedUntil) return true;
+  if (now - lastProbe >= PROBE_MS) { lastProbe = now; return true; }
+  return false;
+}
+
 // Which symbols have their full chain on screen right now.
 function activeSymbols() {
   const set = new Set();
@@ -466,8 +492,22 @@ function activeSymbols() {
 // already at the concurrency cap (the rotation will pick them up next tick).
 function refreshSymbol(sym, bg) {
   if (bg && inFlight >= MAX_INFLIGHT) return;
+  if (!canFetch()) return;   // rate-limit backoff (still allows a periodic probe)
   const e = watchlist.get(sym);
   if (e) fetchChain(sym, e.expiry);
+}
+
+function updateRateBanner() {
+  const banner = document.getElementById('rateBanner');
+  const now = Date.now();
+  if (now < rateLimitedUntil) {
+    const secs = Math.ceil((rateLimitedUntil - now) / 1000);
+    document.getElementById('rateBannerText').textContent =
+      `Upstox rate limit hit — pausing to recover, retrying in ${secs}s. Tip: watch fewer stocks for live updates.`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
 }
 
 // Fetch every stock's complete chain once, staggered + capped so we never burst.
@@ -1074,6 +1114,7 @@ updateViewToolbar();
 connected = true;
 setConnStatus('live');
 startAllPolling();
+setInterval(updateRateBanner, 1000);   // live countdown on the backoff banner
 </script>
 </body>
 </html>
