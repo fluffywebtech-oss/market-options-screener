@@ -395,6 +395,7 @@ async function fetchChain(sym, expiry) {
   const firstLoad = !entry.rows.length;
   if (firstLoad) { entry.loading = true; entry.error = null; renderCards(); }
 
+  inFlight++;
   try {
     const url = `${API_BASE}/api/chain?symbol=${encodeURIComponent(sym)}` + (expiry ? `&expiry=${encodeURIComponent(expiry)}` : '');
     const res = await fetch(url, { cache:'no-store' });
@@ -428,6 +429,8 @@ async function fetchChain(sym, expiry) {
       entry.loading = false;
       onDataUpdated(sym);
     }
+  } finally {
+    inFlight--;
   }
 }
 
@@ -443,13 +446,18 @@ function onDataUpdated(sym) {
   }
 }
 
-// ========================= POLLING (smart / tiered) =========================
-// On-screen chains (the selected symbol, or the 4 quad panes) refresh fast;
-// the rest of the watchlist — only shown as summary cards — refreshes slowly.
-// This cuts the request rate dramatically vs. polling every symbol at 2s.
-const FAST_MS = 2000;   // symbols whose full chain is visible
-const SLOW_MS = 8000;   // background cards
-let fastTimer = null, slowTimer = null;
+// ========================= POLLING (preload-all, staggered) =========================
+// Every watchlist stock's COMPLETE chain is preloaded and kept refreshed, so
+// the screener metrics and drill-in are always exact and instant. To avoid a
+// 40-request burst that would trip Upstox rate limits, background stocks are
+// refreshed on a rotating batch, while on-screen chains stay fast.
+const FAST_MS = 2000;    // on-screen chains (selected symbol / quad panes)
+const BG_TICK_MS = 500;  // how often to fire a background batch
+const BG_BATCH = 3;      // background symbols refreshed per batch
+const PRELOAD_STAGGER = 120; // ms between each stock's initial fetch
+const MAX_INFLIGHT = 6;  // cap concurrent requests so we never burst Upstox
+let fastTimer = null, bgTimer = null, bgIndex = 0;
+let inFlight = 0;        // live request count (maintained in fetchChain)
 
 // Which symbols have their full chain on screen right now.
 function activeSymbols() {
@@ -462,15 +470,33 @@ function activeSymbols() {
   return set;
 }
 
-function refreshSymbol(sym) {
+// bg=true applies backpressure: background refreshes are skipped when we're
+// already at the concurrency cap (the rotation will pick them up next tick).
+function refreshSymbol(sym, bg) {
+  if (bg && inFlight >= MAX_INFLIGHT) return;
   const e = watchlist.get(sym);
   if (e) fetchChain(sym, e.expiry);
 }
 
-// fast=true → refresh on-screen chains; fast=false → refresh background cards.
-function pollTick(fast) {
+// Fetch every stock's complete chain once, staggered + capped so we never burst.
+function preloadAll() {
+  [...watchlist.keys()].forEach((sym, i) =>
+    setTimeout(() => { if (connected && watchlist.has(sym)) refreshSymbol(sym, true); }, i * PRELOAD_STAGGER));
+}
+
+function fastTick() { activeSymbols().forEach(s => refreshSymbol(s)); }  // on-screen: never gated
+
+// Rotate through the background stocks a few at a time so all stay fresh
+// (a full 40-stock cycle takes a few seconds) without exceeding MAX_INFLIGHT.
+function bgTick() {
   const active = activeSymbols();
-  watchlist.forEach((_, sym) => { if (fast === active.has(sym)) refreshSymbol(sym); });
+  const bg = [...watchlist.keys()].filter(s => !active.has(s));
+  if (!bg.length) return;
+  const slots = Math.min(BG_BATCH, MAX_INFLIGHT - inFlight, bg.length);
+  for (let n = 0; n < slots; n++) {
+    refreshSymbol(bg[bgIndex % bg.length], true);
+    bgIndex++;
+  }
 }
 
 // Immediately refresh whatever chains are currently on screen (snappy on
@@ -482,20 +508,20 @@ function refreshActive() {
 function startAllPolling() {
   if (!connected) return;
   stopAllPolling();
-  watchlist.forEach((_, sym) => refreshSymbol(sym));   // one immediate pass
-  fastTimer = setInterval(() => pollTick(true), FAST_MS);
-  slowTimer = setInterval(() => pollTick(false), SLOW_MS);
+  preloadAll();                                 // staggered initial load of every chain
+  fastTimer = setInterval(fastTick, FAST_MS);
+  bgTimer = setInterval(bgTick, BG_TICK_MS);
 }
 
 function stopAllPolling() {
   if (fastTimer) clearInterval(fastTimer);
-  if (slowTimer) clearInterval(slowTimer);
-  fastTimer = slowTimer = null;
+  if (bgTimer) clearInterval(bgTimer);
+  fastTimer = bgTimer = null;
 }
 
-// Kick a single symbol immediately (used right after adding a stock); the
-// running fast/slow timers then keep it updated.
-function startPolling(sym) { refreshSymbol(sym); }
+// Kick a single symbol right after adding it (backpressure-aware, so bulk
+// adds don't burst); the rotating timers then keep it refreshed.
+function startPolling(sym) { refreshSymbol(sym, true); }
 
 // ========================= CONNECTION =========================
 function setConnStatus(kind) {
@@ -636,8 +662,11 @@ function updateViewToolbar() {
 
   document.getElementById('viewToolbarTitle').textContent =
     viewMode === 'screener' ? 'Screener' : 'Option Chains';
-  document.getElementById('stockCount').textContent =
-    watchlist.size ? `${watchlist.size} stock${watchlist.size > 1 ? 's' : ''}` : '';
+  const loaded = [...watchlist.values()].filter(d => d.rows && d.rows.length).length;
+  document.getElementById('stockCount').textContent = watchlist.size
+    ? `${watchlist.size} stock${watchlist.size > 1 ? 's' : ''}` +
+      (loaded < watchlist.size ? ` · ${loaded}/${watchlist.size} chains loaded` : ' · all chains loaded')
+    : '';
 
   const active = ' bg-indigo-600 text-white';
   const idle = ' text-slate-400 hover:text-white';
