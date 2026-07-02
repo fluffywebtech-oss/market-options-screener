@@ -370,44 +370,72 @@ function clearCardsPaused() {
 }
 
 // ========================= RENDER: WATCHLIST CARDS =========================
+// Reconciles the DOM instead of rebuilding it: each card is CREATED once
+// (so its fade-in animation runs a single time) and subsequent polls only
+// update the changing numbers in place. This is what stops the cards from
+// blinking/re-animating on every 2-second refresh.
 function renderCards() {
   const container = document.getElementById('watchlistCards');
   document.getElementById('emptyState').classList.toggle('hidden', watchlist.size > 0);
 
-  if (!watchlist.size) { container.innerHTML = ''; return; }
+  // Drop cards whose symbol was removed from the watchlist.
+  [...container.children].forEach(el => {
+    if (!watchlist.has(el.getAttribute('data-sym'))) el.remove();
+  });
 
-  container.innerHTML = [...watchlist.entries()].map(([sym, d]) => {
-    const isSelected = sym === selectedSymbol;
-    const change = d.lastSpot && d.spot ? d.spot - d.lastSpot : 0;
-    const changePct = d.lastSpot ? ((change / d.lastSpot) * 100) : 0;
-    const up = change >= 0;
+  // Create missing cards, then update every card's values in place.
+  watchlist.forEach((d, sym) => {
+    let el = container.querySelector(`[data-sym="${sym}"]`);
+    if (!el) {
+      el = document.createElement('div');
+      el.setAttribute('data-sym', sym);
+      el.className = 'relative bg-slate-900 border rounded-xl p-3.5 cursor-pointer transition-all card-glow fade-in border-slate-800 hover:border-slate-600';
+      el.onclick = () => selectSymbol(sym);
+      el.innerHTML =
+        `<button class="absolute top-2 right-2 text-slate-600 hover:text-rose-400 text-xs transition" title="Remove">&#10005;</button>` +
+        `<div data-role="seg" class="text-xs text-slate-500 font-medium uppercase tracking-wider">F&amp;O</div>` +
+        `<div class="text-base font-bold text-white mt-0.5">${sym}</div>` +
+        `<div data-role="body"></div>`;
+      el.querySelector('button').onclick = (e) => removeWatchlistItem(sym, e);
+      container.appendChild(el);
+    }
+    updateCard(el, sym, d);
+  });
+}
 
-    const maxCallOI = d.rows.length ? Math.max(...d.rows.map(r => r.call?.oi || 0)) : 0;
-    const maxPutOI  = d.rows.length ? Math.max(...d.rows.map(r => r.put?.oi || 0)) : 0;
+// Update one card's dynamic content in place — no element recreation, so no
+// re-triggered animation and no flicker.
+function updateCard(el, sym, d) {
+  const selected = sym === selectedSymbol;
+  el.classList.toggle('border-indigo-500', selected);
+  el.classList.toggle('ring-1', selected);
+  el.classList.toggle('ring-indigo-500/30', selected);
+  el.classList.toggle('border-slate-800', !selected);
+  el.classList.toggle('hover:border-slate-600', !selected);
+  el.classList.toggle('opacity-70', !connected && !d.loading);
 
-    return `
-      <div onclick="selectSymbol('${sym}')"
-        class="relative bg-slate-900 border rounded-xl p-3.5 cursor-pointer transition-all card-glow fade-in
-               ${isSelected ? 'border-indigo-500 ring-1 ring-indigo-500/30' : 'border-slate-800 hover:border-slate-600'}">
-        <button onclick="removeWatchlistItem('${sym}', event)"
-          class="absolute top-2 right-2 text-slate-600 hover:text-rose-400 text-xs transition" title="Remove">&#10005;</button>
-        <div class="text-xs text-slate-500 font-medium uppercase tracking-wider">${d.cashOnly ? 'CASH' : 'F&O'}</div>
-        <div class="text-base font-bold text-white mt-0.5">${sym}</div>
-        ${d.loading ? '<div class="text-xs text-slate-600 mt-1">Loading...</div>' :
-          d.error ? `<div class="text-xs text-rose-400 mt-1 truncate" title="${d.error}">Error</div>` : `
-          <div class="text-lg font-bold tabular-nums mt-1 ${up ? 'text-emerald-400' : 'text-rose-400'}">${fmt(d.spot)}</div>
-          <div class="text-[11px] tabular-nums ${up ? 'text-emerald-500' : 'text-rose-500'}">
-            ${up?'+':''}${fmt(change)} (${up?'+':''}${changePct.toFixed(2)}%)
-          </div>
-          ${d.rows.length ? `
-          <div class="flex gap-2 mt-2 text-[10px] text-slate-500">
-            <span title="Max Call OI">C: ${fmtOI(maxCallOI)}</span>
-            <span title="Max Put OI">P: ${fmtOI(maxPutOI)}</span>
-            <span title="Total strikes">${d.rows.length} stk</span>
-          </div>` : ''}
-        `}
-      </div>`;
-  }).join('');
+  el.querySelector('[data-role="seg"]').textContent = d.cashOnly ? 'CASH' : 'F&O';
+
+  const body = el.querySelector('[data-role="body"]');
+
+  if (d.loading) { body.innerHTML = '<div class="text-xs text-slate-600 mt-1">Loading...</div>'; return; }
+  if (d.error)   { body.innerHTML = `<div class="text-xs text-rose-400 mt-1 truncate" title="${d.error}">Error</div>`; return; }
+
+  const change = d.lastSpot && d.spot ? d.spot - d.lastSpot : 0;
+  const changePct = d.lastSpot ? (change / d.lastSpot) * 100 : 0;
+  const up = change >= 0;
+  const maxCallOI = d.rows.length ? Math.max(...d.rows.map(r => r.call?.oi || 0)) : 0;
+  const maxPutOI  = d.rows.length ? Math.max(...d.rows.map(r => r.put?.oi || 0)) : 0;
+
+  body.innerHTML =
+    `<div class="text-lg font-bold tabular-nums mt-1 ${up?'text-emerald-400':'text-rose-400'}">${fmt(d.spot)}</div>` +
+    `<div class="text-[11px] tabular-nums ${up?'text-emerald-500':'text-rose-500'}">${up?'+':''}${fmt(change)} (${up?'+':''}${changePct.toFixed(2)}%)</div>` +
+    (d.rows.length
+      ? `<div class="flex gap-2 mt-2 text-[10px] text-slate-500">` +
+        `<span title="Max Call OI">C: ${fmtOI(maxCallOI)}</span>` +
+        `<span title="Max Put OI">P: ${fmtOI(maxPutOI)}</span>` +
+        `<span title="Total strikes">${d.rows.length} stk</span></div>`
+      : '');
 }
 
 // ========================= RENDER: DETAIL PANEL =========================
