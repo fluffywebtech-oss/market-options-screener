@@ -295,8 +295,9 @@ def get_chain_cached(symbol, expiry):
 
     try:
         payload = get_chain(symbol, expiry)
-    except UpstoxError:
-        payload = None
+        err = None
+    except UpstoxError as e:
+        payload, err = None, e
 
     if _is_good(payload):
         if len(_CACHE) >= _CACHE_MAX:      # simple size guard: drop oldest entry
@@ -312,7 +313,7 @@ def get_chain_cached(symbol, expiry):
 
     if payload is not None:                # genuinely cash-only or empty
         return payload
-    raise UpstoxError(502, "Upstream unavailable and no cached chain yet.")
+    raise err or UpstoxError(502, "Upstream unavailable and no cached chain yet.")
 
 
 # ------------------------------------------------------------------ handler
