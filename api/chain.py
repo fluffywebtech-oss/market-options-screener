@@ -26,11 +26,12 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from collections import Counter
 from http.server import BaseHTTPRequestHandler
 
 UPSTOX_HOST = "https://api.upstox.com"
-STRIKES_EACH_SIDE = 20   # strikes above AND below ATM -> ~41-row chain
+# Real chains return the FULL strike list; this only bounds the synthetic grid
+# used for cash-only stocks that have no listed options.
+STRIKES_EACH_SIDE = 20
 
 # Short-lived in-memory cache. Vercel keeps a warm Lambda between invocations,
 # so this dict persists across requests on the same instance. It collapses the
@@ -174,43 +175,11 @@ def build_option_chain(symbol, instrument_key, expiry, expiries):
     }).get("data", []) or []
 
     spot = data[0].get("underlying_spot_price", 0.0) if data else 0.0
+
+    # Full chain: return every strike the exchange lists for this expiry,
+    # sorted low -> high. (PCR / Max Pain / OI totals then cover the whole
+    # chain, and the frontend highlights ATM + windows as it sees fit.)
     data.sort(key=lambda r: r.get("strike_price", 0))
-
-    if data:
-        strikes = [r.get("strike_price", 0) for r in data]
-        diffs = [round(strikes[i + 1] - strikes[i], 2) for i in range(len(strikes) - 1)]
-        diffs = [d for d in diffs if d > 0]
-        step = Counter(diffs).most_common(1)[0][0] if diffs else 0
-
-        atm_idx = min(range(len(data)),
-                      key=lambda i: abs(data[i].get("strike_price", 0) - spot))
-        atm = data[atm_idx].get("strike_price", 0)
-
-        if step > 0:
-            by_strike = {round(r.get("strike_price", 0), 2): r for r in data}
-
-            def find(t):
-                for s, r in by_strike.items():
-                    if abs(s - t) < 0.01:
-                        return r
-                return None
-
-            selected = [by_strike[round(atm, 2)]] if round(atm, 2) in by_strike else []
-            for i in range(1, STRIKES_EACH_SIDE + 1):
-                up = find(atm + i * step)
-                if up is None:
-                    break
-                selected.append(up)
-            for i in range(1, STRIKES_EACH_SIDE + 1):
-                dn = find(atm - i * step)
-                if dn is None:
-                    break
-                selected.append(dn)
-            data = sorted(selected, key=lambda r: r.get("strike_price", 0)) or data
-        else:
-            lo = max(0, atm_idx - STRIKES_EACH_SIDE)
-            hi = min(len(data), atm_idx + STRIKES_EACH_SIDE + 1)
-            data = data[lo:hi]
 
     rows = [{
         "strike": r.get("strike_price"),
