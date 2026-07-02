@@ -41,6 +41,13 @@ _CACHE = {}
 _CACHE_TTL = 3.0        # seconds a cached chain is considered fresh
 _CACHE_MAX = 200        # guard against unbounded growth
 
+# Instrument keys and expiry lists don't change intraday, so cache them for a
+# long time. This keeps the flaky /instruments/search and /option/contract
+# endpoints off the hot path (they were the ones intermittently rate-limiting
+# and forcing the synthetic cash-only fallback).
+_META_CACHE = {}
+_META_TTL = 1800.0      # 30 min
+
 # Fast-path map for common indices (search also works, this just saves a call).
 SYMBOL_TO_INSTRUMENT = {
     "NIFTY": "NSE_INDEX|Nifty 50",
@@ -93,10 +100,26 @@ def _get(path, params):
 
 
 # ------------------------------------------------------------------ helpers
+def _meta_get(key):
+    hit = _META_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _META_TTL:
+        return hit[1]
+    return None
+
+
+def _meta_put(key, val):
+    if val:                       # never cache an empty/failed result
+        _META_CACHE[key] = (time.time(), val)
+
+
 def resolve_instrument(symbol):
     symbol = symbol.upper().strip()
     if symbol in SYMBOL_TO_INSTRUMENT:
         return SYMBOL_TO_INSTRUMENT[symbol]
+
+    cached = _meta_get(("inst", symbol))
+    if cached:
+        return cached
 
     data = _get("/v2/instruments/search", {"query": symbol}).get("data", []) or []
 
@@ -126,15 +149,20 @@ def resolve_instrument(symbol):
 
     if not ordered:
         raise UpstoxError(404, f"No NSE stock/index found for '{symbol}'")
+    _meta_put(("inst", symbol), ordered[0])
     return ordered[0]
 
 
 def get_expiries(instrument_key):
+    cached = _meta_get(("exp", instrument_key))
+    if cached:
+        return cached
     try:
         data = _get("/v2/option/contract", {"instrument_key": instrument_key}).get("data", []) or []
     except UpstoxError:
-        return []
+        return []                 # transient failure — don't cache, retry next time
     exps = sorted({(d.get("expiry") or "")[:10] for d in data if d.get("expiry")})
+    _meta_put(("exp", instrument_key), exps)
     return exps
 
 
