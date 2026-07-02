@@ -206,7 +206,6 @@ const API_BASE = IS_REMOTE ? '' : PROD_API;
 const watchlist = new Map();   // symbol -> { spot, expiry, expiries, rows, cashOnly, lastSpot, loading, error }
 let selectedSymbol = null;
 let customStrikes = [];
-let pollTimers = {};
 let ws = null;
 let connected = false;
 
@@ -326,8 +325,7 @@ function addWatchlistItem(sym) {
 
 function removeWatchlistItem(sym, e) {
   e && e.stopPropagation();
-  watchlist.delete(sym);
-  if (pollTimers[sym]) { clearInterval(pollTimers[sym]); delete pollTimers[sym]; }
+  watchlist.delete(sym);   // the tiered timers simply stop polling it next tick
   if (selectedSymbol === sym) { selectedSymbol = null; hideDetail(); }
   quadSlots = quadSlots.map(s => s === sym ? null : s);   // free any quad pane
   quadMembershipSig = '';
@@ -352,6 +350,7 @@ function selectSymbol(sym) {
   customStrikes = [];
   renderCards();
   renderDetail();
+  refreshActive();
 }
 
 // ========================= FETCH DATA =========================
@@ -411,21 +410,59 @@ function onDataUpdated(sym) {
   }
 }
 
-// ========================= POLLING =========================
+// ========================= POLLING (smart / tiered) =========================
+// On-screen chains (the selected symbol, or the 4 quad panes) refresh fast;
+// the rest of the watchlist — only shown as summary cards — refreshes slowly.
+// This cuts the request rate dramatically vs. polling every symbol at 2s.
+const FAST_MS = 2000;   // symbols whose full chain is visible
+const SLOW_MS = 8000;   // background cards
+let fastTimer = null, slowTimer = null;
+
+// Which symbols have their full chain on screen right now.
+function activeSymbols() {
+  const set = new Set();
+  if (viewMode === 'quad') {
+    quadSlots.forEach(s => { if (s && watchlist.has(s)) set.add(s); });
+  } else if (selectedSymbol && watchlist.has(selectedSymbol)) {
+    set.add(selectedSymbol);
+  }
+  return set;
+}
+
+function refreshSymbol(sym) {
+  const e = watchlist.get(sym);
+  if (e) fetchChain(sym, e.expiry);
+}
+
+// fast=true → refresh on-screen chains; fast=false → refresh background cards.
+function pollTick(fast) {
+  const active = activeSymbols();
+  watchlist.forEach((_, sym) => { if (fast === active.has(sym)) refreshSymbol(sym); });
+}
+
+// Immediately refresh whatever chains are currently on screen (snappy on
+// select / view-switch) without waiting for the next fast tick.
+function refreshActive() {
+  if (connected) activeSymbols().forEach(refreshSymbol);
+}
+
 function startAllPolling() {
-  watchlist.forEach((_, sym) => startPolling(sym));
+  if (!connected) return;
+  stopAllPolling();
+  watchlist.forEach((_, sym) => refreshSymbol(sym));   // one immediate pass
+  fastTimer = setInterval(() => pollTick(true), FAST_MS);
+  slowTimer = setInterval(() => pollTick(false), SLOW_MS);
 }
+
 function stopAllPolling() {
-  Object.keys(pollTimers).forEach(sym => { clearInterval(pollTimers[sym]); delete pollTimers[sym]; });
+  if (fastTimer) clearInterval(fastTimer);
+  if (slowTimer) clearInterval(slowTimer);
+  fastTimer = slowTimer = null;
 }
-function startPolling(sym) {
-  if (pollTimers[sym]) return;
-  fetchChain(sym, watchlist.get(sym)?.expiry);
-  pollTimers[sym] = setInterval(() => {
-    const entry = watchlist.get(sym);
-    fetchChain(sym, entry?.expiry);
-  }, 2000);
-}
+
+// Kick a single symbol immediately (used right after adding a stock); the
+// running fast/slow timers then keep it updated.
+function startPolling(sym) { refreshSymbol(sym); }
 
 // ========================= CONNECTION =========================
 function setConnStatus(kind) {
@@ -591,6 +628,7 @@ function setViewMode(mode) {
   updateViewToolbar();
   if (mode === 'quad') renderQuad();
   else renderDetail();
+  refreshActive();
 }
 
 // ========================= RENDER: QUAD (2x2) VIEW =========================

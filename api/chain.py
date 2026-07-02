@@ -23,6 +23,7 @@ use dynamic IPs, so that restriction must be DISABLED for this to work.
 
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -30,6 +31,14 @@ from http.server import BaseHTTPRequestHandler
 
 UPSTOX_HOST = "https://api.upstox.com"
 STRIKES_EACH_SIDE = 10
+
+# Short-lived in-memory cache. Vercel keeps a warm Lambda between invocations,
+# so this dict persists across requests on the same instance. It collapses the
+# rapid 2s polling (and the same symbol requested by several panes/tabs) into
+# far fewer Upstox calls, which is what avoids hitting Upstox rate limits.
+_CACHE = {}
+_CACHE_TTL = 3.0        # seconds a cached chain is considered fresh
+_CACHE_MAX = 200        # guard against unbounded growth
 
 # Fast-path map for common indices (search also works, this just saves a call).
 SYMBOL_TO_INSTRUMENT = {
@@ -257,6 +266,27 @@ def get_chain(symbol, expiry):
     return build_option_chain(symbol, instrument_key, expiry, expiries)
 
 
+def get_chain_cached(symbol, expiry):
+    """get_chain() with a short TTL cache to throttle upstream Upstox calls.
+
+    On error we still raise (so errors are never cached); only successful
+    payloads are stored, and only for _CACHE_TTL seconds.
+    """
+    key = (symbol.upper(), expiry or "")
+    now = time.time()
+    hit = _CACHE.get(key)
+    if hit and (now - hit[0]) < _CACHE_TTL:
+        return hit[1]
+
+    payload = get_chain(symbol, expiry)
+
+    if len(_CACHE) >= _CACHE_MAX:          # simple size guard: drop oldest entry
+        oldest = min(_CACHE, key=lambda k: _CACHE[k][0])
+        _CACHE.pop(oldest, None)
+    _CACHE[key] = (now, payload)
+    return payload
+
+
 # ------------------------------------------------------------------ handler
 class handler(BaseHTTPRequestHandler):
     """Classic Vercel Python serverless function entrypoint."""
@@ -268,7 +298,7 @@ class handler(BaseHTTPRequestHandler):
         expiry = params.get("expiry", [None])[0] or None
 
         try:
-            payload = get_chain(symbol, expiry)
+            payload = get_chain_cached(symbol, expiry)
         except UpstoxError as e:
             payload = {"type": "error", "message": e.message, "status": e.status}
         except Exception as e:  # pragma: no cover
