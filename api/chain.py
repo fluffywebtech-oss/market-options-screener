@@ -217,19 +217,66 @@ def _leg(opt):
     md = opt.get("market_data") or {}
     gk = opt.get("option_greeks") or {}
 
-    def num(v):
+    def num(v, nd=2):
         try:
-            return round(float(v), 2)
+            return round(float(v), nd)
         except (TypeError, ValueError):
             return 0.0
 
+    oi = num(md.get("oi"))
+    prev_oi = num(md.get("prev_oi"))
     return {
         "ltp": num(md.get("ltp")),
-        "oi": num(md.get("oi")),
+        "oi": oi,
+        "prev_oi": prev_oi,
+        "oi_chg": round(oi - prev_oi, 2),
+        "volume": num(md.get("volume")),
         "bid": num(md.get("bid_price")),
         "ask": num(md.get("ask_price")),
         "iv": num(gk.get("iv")),
+        "delta": num(gk.get("delta"), 4),
+        "gamma": num(gk.get("gamma"), 4),
+        "theta": num(gk.get("theta"), 2),
+        "vega": num(gk.get("vega"), 2),
+        "pop": num(gk.get("pop")),
     }
+
+
+def _compute_analytics(rows, spot):
+    """Put-Call Ratio, Max Pain, OI totals, and ATM strike for a chain."""
+    total_call_oi = sum(r["call"]["oi"] for r in rows)
+    total_put_oi = sum(r["put"]["oi"] for r in rows)
+    pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi else 0.0
+
+    # Max pain: the expiry strike (among listed strikes) at which the total
+    # intrinsic value payable to option holders is minimized (i.e. writers'
+    # pain is least). Uses open interest as the weight.
+    strikes = [r["strike"] for r in rows if r.get("strike") is not None]
+    max_pain = None
+    if strikes:
+        best_loss = None
+        for expiry_price in strikes:
+            loss = 0.0
+            for r in rows:
+                k = r["strike"]
+                if k is None:
+                    continue
+                loss += r["call"]["oi"] * max(0.0, expiry_price - k)
+                loss += r["put"]["oi"] * max(0.0, k - expiry_price)
+            if best_loss is None or loss < best_loss:
+                best_loss = loss
+                max_pain = expiry_price
+
+    atm = min(strikes, key=lambda k: abs(k - spot)) if strikes else None
+
+    return {
+        "pcr": pcr,
+        "max_pain": max_pain,
+        "total_call_oi": round(total_call_oi, 2),
+        "total_put_oi": round(total_put_oi, 2),
+        "atm": atm,
+    }
+
 
 
 def build_option_chain(symbol, instrument_key, expiry, expiries):
@@ -259,9 +306,11 @@ def build_option_chain(symbol, instrument_key, expiry, expiries):
             if r["call"]["oi"] or r["put"]["oi"] or r["call"]["ltp"] or r["put"]["ltp"]]
     rows = live or rows
 
+    analytics = _compute_analytics(rows, spot)
     return {
         "type": "chain", "symbol": symbol, "spot": round(spot, 2),
         "expiry": expiry, "expiries": expiries, "rows": rows,
+        **analytics,
     }
 
 
@@ -288,8 +337,10 @@ def build_synthetic_chain(symbol, instrument_key):
             continue
         rows.append({
             "strike": strike,
-            "call": {"ltp": round(max(0.0, spot - strike), 2), "oi": 0, "bid": 0, "ask": 0, "iv": 0},
-            "put": {"ltp": round(max(0.0, strike - spot), 2), "oi": 0, "bid": 0, "ask": 0, "iv": 0},
+            "call": {"ltp": round(max(0.0, spot - strike), 2), "oi": 0, "prev_oi": 0, "oi_chg": 0,
+                     "volume": 0, "bid": 0, "ask": 0, "iv": 0, "delta": 0, "gamma": 0, "theta": 0, "vega": 0, "pop": 0},
+            "put": {"ltp": round(max(0.0, strike - spot), 2), "oi": 0, "prev_oi": 0, "oi_chg": 0,
+                    "volume": 0, "bid": 0, "ask": 0, "iv": 0, "delta": 0, "gamma": 0, "theta": 0, "vega": 0, "pop": 0},
         })
 
     return {

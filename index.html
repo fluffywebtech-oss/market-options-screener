@@ -183,21 +183,23 @@
         <table class="w-full text-sm">
           <thead class="sticky top-0 z-10">
             <tr class="bg-slate-950/90 backdrop-blur text-[11px] uppercase tracking-wider">
-              <th colspan="5" class="py-2.5 text-center text-emerald-400 font-semibold border-b border-slate-800">Calls</th>
+              <th colspan="6" class="py-2.5 text-center text-emerald-400 font-semibold border-b border-slate-800">Calls</th>
               <th class="py-2.5 text-center text-slate-400 font-semibold border-b border-slate-800 border-x border-slate-700 bg-slate-950/80">Strike</th>
-              <th colspan="5" class="py-2.5 text-center text-rose-400 font-semibold border-b border-slate-800">Puts</th>
+              <th colspan="6" class="py-2.5 text-center text-rose-400 font-semibold border-b border-slate-800">Puts</th>
             </tr>
             <tr class="bg-slate-950 text-[10px] uppercase tracking-wider text-slate-600">
               <th class="py-2 px-2 text-left font-medium">Status</th>
-              <th class="py-2 px-2 text-right font-medium">OI</th>
+              <th class="py-2 px-2 text-right font-medium">OI (Chg)</th>
               <th class="py-2 px-2 text-right font-medium">IV</th>
+              <th class="py-2 px-2 text-right font-medium">Δ</th>
               <th class="py-2 px-2 text-right font-medium">Bid/Ask</th>
               <th class="py-2 px-2 text-right font-medium text-emerald-500">LTP</th>
               <th class="py-2 px-2 text-center font-medium border-x border-slate-700 bg-slate-950/80">Price</th>
               <th class="py-2 px-2 text-left font-medium text-rose-500">LTP</th>
               <th class="py-2 px-2 text-left font-medium">Bid/Ask</th>
+              <th class="py-2 px-2 text-left font-medium">Δ</th>
               <th class="py-2 px-2 text-left font-medium">IV</th>
-              <th class="py-2 px-2 text-left font-medium">OI</th>
+              <th class="py-2 px-2 text-left font-medium">OI (Chg)</th>
               <th class="py-2 px-2 text-right font-medium">Status</th>
             </tr>
           </thead>
@@ -319,7 +321,12 @@ function computeAnalytics(d) {
   rows.forEach(r => { const df = Math.abs(r.strike - spot); if (df < best) { best = df; atmR = r; } });
   const straddle = (atmR.call?.ltp || 0) + (atmR.put?.ltp || 0);
 
-  return { totCall, totPut, pcr, maxPain, support, resistance, straddle, atmStrike: atmR.strike };
+  // Prefer backend-computed PCR / Max Pain (whole-chain) when available.
+  const pcrFinal = (typeof d.pcr === 'number' && d.pcr) ? d.pcr : pcr;
+  const maxPainFinal = (d.max_pain != null) ? d.max_pain : maxPain;
+
+  return { totCall, totPut, pcr: pcrFinal, maxPain: maxPainFinal, support, resistance,
+           straddle, atmStrike: atmR.strike };
 }
 
 function analyticsStripHTML(a) {
@@ -455,6 +462,10 @@ async function fetchChain(sym, expiry) {
       entry.expiries = data.expiries || [];
       entry.rows = data.rows || [];
       entry.cashOnly = !!data.cash_only;
+      entry.pcr = data.pcr;
+      entry.max_pain = data.max_pain;
+      entry.total_call_oi = data.total_call_oi;
+      entry.total_put_oi = data.total_put_oi;
       entry.loading = false;
       entry.error = null;
       onDataUpdated(sym);
@@ -1189,6 +1200,14 @@ function renderStockGraph(sym, d) {
   </div>`;
 }
 
+// Small colored OI-change indicator (buildup green / unwinding red).
+function oiChg(v) {
+  v = Number(v || 0);
+  if (!v) return '';
+  const up = v > 0;
+  return `<span class="block text-[9px] leading-none ${up ? 'text-emerald-500' : 'text-rose-500'}">${up ? '+' : ''}${fmtOI(v)}</span>`;
+}
+
 function renderChainTable(d, spot) {
   const body = document.getElementById('chainBody');
 
@@ -1208,7 +1227,7 @@ function renderChainTable(d, spot) {
   const rows = [...byStrike.values()].sort((a,b) => a.strike - b.strike);
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="11" class="py-10 text-center text-slate-600 text-sm">
+    body.innerHTML = `<tr><td colspan="13" class="py-10 text-center text-slate-600 text-sm">
       ${d.loading ? 'Loading option chain...' : d.error ? d.error : 'No data available. Start live data to fetch.'}</td></tr>`;
     return;
   }
@@ -1235,8 +1254,9 @@ function renderChainTable(d, spot) {
 
     return `<tr class="${atmBorder} hover:bg-slate-800/40 transition-colors" ${isATM ? 'data-atm="1"' : ''}>
       <td class="py-2 px-2 ${callBg}">${badge(callITM,'emerald')}</td>
-      <td class="py-2 px-2 text-right tabular-nums text-xs ${callBg} ${callITM?'text-slate-400':'text-slate-600'}">${fmtOI(c.oi)}</td>
+      <td class="py-2 px-2 text-right tabular-nums text-xs ${callBg} ${callITM?'text-slate-400':'text-slate-600'}">${fmtOI(c.oi)}${oiChg(c.oi_chg)}</td>
       <td class="py-2 px-2 text-right tabular-nums text-xs ${callBg} text-slate-600">${Number(c.iv||0).toFixed(1)}</td>
+      <td class="py-2 px-2 text-right tabular-nums text-xs ${callBg} text-slate-500">${Number(c.delta||0).toFixed(2)}</td>
       <td class="py-2 px-2 text-right tabular-nums text-xs ${callBg} text-slate-600">${fmt(c.bid||0)}/${fmt(c.ask||0)}</td>
       <td class="py-2 px-2 text-right tabular-nums font-semibold ${callBg} ${callITM?'text-emerald-400':'text-slate-400'}">${fmt(c.ltp)}</td>
       <td class="py-2 px-2 text-center font-bold tabular-nums bg-slate-950/60 border-x border-slate-700/50 ${isATM?'text-indigo-400':'text-slate-300'}">
@@ -1244,8 +1264,9 @@ function renderChainTable(d, spot) {
       </td>
       <td class="py-2 px-2 text-left tabular-nums font-semibold ${putBg} ${putITM?'text-rose-400':'text-slate-400'}">${fmt(p.ltp)}</td>
       <td class="py-2 px-2 text-left tabular-nums text-xs ${putBg} text-slate-600">${fmt(p.bid||0)}/${fmt(p.ask||0)}</td>
+      <td class="py-2 px-2 text-left tabular-nums text-xs ${putBg} text-slate-500">${Number(p.delta||0).toFixed(2)}</td>
       <td class="py-2 px-2 text-left tabular-nums text-xs ${putBg} text-slate-600">${Number(p.iv||0).toFixed(1)}</td>
-      <td class="py-2 px-2 text-left tabular-nums text-xs ${putBg} ${putITM?'text-slate-400':'text-slate-600'}">${fmtOI(p.oi)}</td>
+      <td class="py-2 px-2 text-left tabular-nums text-xs ${putBg} ${putITM?'text-slate-400':'text-slate-600'}">${fmtOI(p.oi)}${oiChg(p.oi_chg)}</td>
       <td class="py-2 px-2 text-right ${putBg}">${badge(putITM,'rose')}</td>
     </tr>`;
   }).join('');
