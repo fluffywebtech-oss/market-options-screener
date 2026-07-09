@@ -250,8 +250,46 @@ let detailCurSym = null;                      // last symbol the detail table ce
 // Strike-gap filter: show strikes spaced by a gap that scales with the stock
 // price (captures meaningful moves instead of every tiny listed strike).
 let gapMode = true;
-// Graph view: 'table' shows the chain table, 'graph' the Call/Put OI bars.
+// Graph view: 'table' shows the chain table, 'graph' the price chart.
 let chartMode = 'table';
+// Per-pane table/graph mode, keyed "s:<sym>" (screener) or "q:<slot>" (quad).
+let paneCharts = {};
+
+// ========================= PERSISTENCE =========================
+// The watchlist and view settings survive reloads/reconnects via localStorage.
+const STORE_KEY = 'mos.state.v1';
+
+function saveState() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      symbols: [...watchlist.keys()],
+      selectedSymbol, viewMode, quadSlots, gapMode, chartMode, paneCharts,
+    }));
+  } catch (_) { /* storage unavailable — run without persistence */ }
+}
+
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (!s || !Array.isArray(s.symbols) || !s.symbols.length) return false;
+    s.symbols.forEach(sym => {
+      if (!watchlist.has(sym)) {
+        watchlist.set(sym, { spot:0, expiry:null, expiries:[], rows:[], cashOnly:false, lastSpot:0, loading:true, error:null });
+        highlightChip(sym);
+      }
+    });
+    selectedSymbol = (s.selectedSymbol && watchlist.has(s.selectedSymbol)) ? s.selectedSymbol : null;
+    gapMode = s.gapMode !== false;
+    chartMode = s.chartMode === 'graph' ? 'graph' : 'table';
+    if (s.paneCharts && typeof s.paneCharts === 'object') paneCharts = s.paneCharts;
+    if (Array.isArray(s.quadSlots)) {
+      quadSlots = s.quadSlots.slice(0, 4).map(x => (x && watchlist.has(x)) ? x : null);
+      while (quadSlots.length < 4) quadSlots.push(null);
+    }
+    if (['single', 'quad', 'screener'].includes(s.viewMode)) viewMode = s.viewMode;
+    return true;
+  } catch (_) { return false; }
+}
 
 // Price -> strike gap: 100-750 => 50, 750-2100 => 100, 2100-5000 => 200,
 // 5000+ => 500. Below 100 the listed strikes are already coarse; no filter.
@@ -386,6 +424,7 @@ function addWatchlistItem(sym) {
   renderCards();
   selectSymbol(sym);
   highlightChip(sym);
+  saveState();
 
   if (connected) startPolling(sym);
   else { fetchChain(sym); toast(`${sym} added — click "Start Live Data" for continuous updates`, 'warn'); }
@@ -397,20 +436,23 @@ function removeWatchlistItem(sym, e) {
   if (selectedSymbol === sym) { selectedSymbol = null; hideDetail(); }
   quadSlots = quadSlots.map(s => s === sym ? null : s);   // free any quad pane
   quadMembershipSig = '';
+  delete paneCharts['s:' + sym];
   renderCards();
   if (viewMode === 'quad') renderQuad();
   else if (viewMode === 'screener') renderScreener();
   unhighlightChip(sym);
+  saveState();
   if (!watchlist.size) document.getElementById('emptyState').classList.remove('hidden');
 }
 
 function selectSymbol(sym) {
   selectedSymbol = sym;
+  saveState();
   if (viewMode === 'quad') {
     // In quad mode, clicking a card drops it into the first empty pane.
     if (!quadSlots.includes(sym)) {
       let idx = quadSlots.findIndex(s => !s || !watchlist.has(s));
-      if (idx !== -1) { quadSlots[idx] = sym; quadMembershipSig = ''; }
+      if (idx !== -1) { quadSlots[idx] = sym; quadMembershipSig = ''; saveState(); }
     }
     renderCards();
     renderQuad();
@@ -783,6 +825,7 @@ function setViewMode(mode) {
   else if (mode === 'screener') renderScreener();
   else renderDetail();
   refreshActive();
+  saveState();
 }
 
 // ========================= RENDER: SCREENER (grid of chain panes) =========================
@@ -869,8 +912,9 @@ function fillChainPane(pane, sym) {
           : analyticsLineHTML(computeAnalytics(d)));
   }
 
-  // Per-pane table/graph mode (toggled by the pane's 📊 button).
-  const paneGraph = pane.dataset.chart === 'graph';
+  // Per-pane table/graph mode (toggled by the pane's 📊 button). Stored in
+  // paneCharts (persisted), not the DOM, so it survives rebuilds and reloads.
+  const paneGraph = paneCharts[paneChartKey(pane)] === 'graph';
   const gBtn = pane.querySelector('[data-role="graphbtn"]');
   if (gBtn) gBtn.className = 'text-xs px-1.5 py-0.5 rounded border transition ' +
     (paneGraph ? 'border-indigo-500 text-indigo-400' : 'border-slate-700 text-slate-500 hover:text-indigo-400 hover:border-indigo-500');
@@ -900,15 +944,24 @@ function fillChainPane(pane, sym) {
   }
 }
 
-// Toggle one quad/screener pane between its chain table and the OI graph.
+// "s:<sym>" for screener panes, "q:<slot>" for quad panes.
+function paneChartKey(pane) {
+  return pane.hasAttribute('data-sym')
+    ? 's:' + pane.getAttribute('data-sym')
+    : 'q:' + pane.getAttribute('data-slot');
+}
+
+// Toggle one quad/screener pane between its chain table and the price graph.
 function togglePaneGraph(btn, e) {
   e && e.stopPropagation();
   const pane = btn.closest('[data-sym], [data-slot]');
   if (!pane) return;
-  pane.dataset.chart = pane.dataset.chart === 'graph' ? 'table' : 'graph';
+  const key = paneChartKey(pane);
+  paneCharts[key] = paneCharts[key] === 'graph' ? 'table' : 'graph';
   delete pane.dataset.cursym;   // re-center ATM when returning to the table
   const sym = pane.getAttribute('data-sym') || quadSlots[Number(pane.getAttribute('data-slot'))];
   fillChainPane(pane, sym);
+  saveState();
 }
 
 // ========================= RENDER: QUAD (2x2) VIEW =========================
@@ -956,6 +1009,7 @@ function buildQuadPane(i) {
     quadSlots[i] = e.target.value || null;
     quadMembershipSig = '';       // rebuild so the other panes' <select> selected-state stays correct
     renderQuad();
+    saveState();
   };
   return pane;
 }
@@ -1108,12 +1162,14 @@ function toggleGap() {
   renderDetail();
   if (viewMode === 'quad') renderQuad();
   else if (viewMode === 'screener') renderScreener();
+  saveState();
 }
 
 function toggleGraph() {
   chartMode = chartMode === 'graph' ? 'table' : 'graph';
   detailCurSym = null;
   renderDetail();
+  saveState();
 }
 
 // ========================= STOCK PRICE GRAPH =========================
@@ -1321,6 +1377,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 });
 
 // ========================= INIT =========================
+const restored = loadState();   // bring back the saved watchlist + view settings
 renderCards();
 updateViewToolbar();
 // A live API is always reachable now (relative when deployed, PROD_API when
@@ -1328,6 +1385,7 @@ updateViewToolbar();
 connected = true;
 setConnStatus('live');
 startAllPolling();
+if (restored) setViewMode(viewMode);   // restore single/quad/screener layout
 setInterval(updateRateBanner, 1000);   // live countdown on the backoff banner
 </script>
 </body>
