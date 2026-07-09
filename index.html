@@ -500,7 +500,13 @@ async function fetchChain(sym, expiry) {
       if (rateLimitedUntil) { rateLimitedUntil = 0; updateRateBanner(); }   // recovered
       entry.lastSpot = entry.spot || data.spot;
       entry.spot = data.spot || 0;
-      entry.expiry = data.expiry || null;
+      // Only update the active expiry from the response if the user hasn't
+      // picked a different month via the pane/detail dropdown since this
+      // request was sent (stale responses from a prior expiry must not
+      // overwrite the user's selection).
+      if (!entry.expiry || entry.expiry === data.expiry || expiry === entry.expiry) {
+        entry.expiry = data.expiry || null;
+      }
       entry.expiries = data.expiries || [];
       entry.rows = data.rows || [];
       entry.cashOnly = !!data.cash_only;
@@ -854,8 +860,9 @@ function buildScreenerPane(sym) {
          <button onclick="openFromScreener('${sym}')" class="text-sm font-bold text-white hover:text-indigo-400 transition" title="Open full chain">${sym}</button>
          <span data-role="spot" class="text-sm font-bold tabular-nums truncate"></span>
        </div>
-       <div class="flex items-center gap-2">
-         <span data-role="exp" class="text-[10px] text-slate-500 whitespace-nowrap"></span>
+       <div class="flex items-center gap-1.5">
+         <select data-role="expsel" onchange="changePaneExpiry(this, event)" title="Expiry month"
+           class="bg-slate-800 border border-slate-700 rounded-md px-1 py-0.5 text-[10px] text-slate-400 focus:outline-none focus:border-indigo-500 max-w-[104px]"></select>
          <button data-role="graphbtn" onclick="togglePaneGraph(this, event)" title="Toggle OI graph"
            class="text-xs px-1.5 py-0.5 rounded border border-slate-700 text-slate-500 hover:text-indigo-400 hover:border-indigo-500 transition">&#128202;</button>
          <button onclick="removeWatchlistItem('${sym}', event)" class="text-slate-600 hover:text-rose-400 text-xs" title="Remove">&#10005;</button>
@@ -884,13 +891,13 @@ function openFromScreener(sym) {
 // live updates.
 function fillChainPane(pane, sym) {
   const spotEl = pane.querySelector('[data-role="spot"]');
-  const expEl = pane.querySelector('[data-role="exp"]');
+  const expSel = pane.querySelector('[data-role="expsel"]');
   const statsEl = pane.querySelector('[data-role="stats"]');
   const chart = pane.querySelector('[data-role="chart"]');
 
   if (!sym || !watchlist.has(sym)) {
     if (spotEl) spotEl.textContent = '';
-    if (expEl) expEl.textContent = '';
+    if (expSel) { expSel.innerHTML = '<option value="">—</option>'; expSel.dataset.sig = ''; }
     if (statsEl) statsEl.innerHTML = '';
     chart.innerHTML = '<div class="py-12 text-center text-slate-600 text-xs">Pick a stock to show its chain</div>';
     delete pane.dataset.cursym;
@@ -903,7 +910,17 @@ function fillChainPane(pane, sym) {
     spotEl.className = 'text-sm font-bold tabular-nums truncate ' +
       ((d.lastSpot && d.spot && d.spot < d.lastSpot) ? 'text-rose-400' : 'text-emerald-400');
   }
-  if (expEl) expEl.textContent = d.expiry || '';
+  // Expiry-month dropdown: rebuild only when the list/selection actually
+  // changed, and never while the user has the dropdown open.
+  if (expSel) {
+    const sig = (d.expiries || []).join(',') + '|' + (d.expiry || '');
+    if (expSel.dataset.sig !== sig && document.activeElement !== expSel) {
+      expSel.dataset.sig = sig;
+      expSel.innerHTML = (d.expiries && d.expiries.length)
+        ? d.expiries.map(x => `<option value="${x}" ${x === d.expiry ? 'selected' : ''}>${x}</option>`).join('')
+        : '<option value="">—</option>';
+    }
+  }
   if (statsEl) {
     statsEl.innerHTML = d.cashOnly
       ? '<div class="px-2.5 py-1.5 border-b border-slate-800 text-[10px] text-amber-500 bg-amber-500/5">No listed options — intrinsic grid</div>'
@@ -942,6 +959,18 @@ function fillChainPane(pane, sym) {
   } else {
     chart.scrollTop = prevScroll;
   }
+}
+
+// Change one pane's expiry month; the symbol's polling then follows it.
+function changePaneExpiry(sel, e) {
+  e && e.stopPropagation();
+  const pane = sel.closest('[data-sym], [data-slot]');
+  if (!pane || !sel.value) return;
+  const sym = pane.getAttribute('data-sym') || quadSlots[Number(pane.getAttribute('data-slot'))];
+  const entry = watchlist.get(sym);
+  if (!entry) return;
+  entry.expiry = sel.value;
+  fetchChain(sym, sel.value);
 }
 
 // "s:<sym>" for screener panes, "q:<slot>" for quad panes.
@@ -996,8 +1025,9 @@ function buildQuadPane(i) {
          <select data-role="pick" class="bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs font-semibold focus:outline-none focus:border-indigo-500">${opts}</select>
          <span data-role="spot" class="text-sm font-bold tabular-nums text-slate-300 truncate"></span>
        </div>
-       <div class="flex items-center gap-2">
-         <span data-role="exp" class="text-[10px] text-slate-500 whitespace-nowrap"></span>
+       <div class="flex items-center gap-1.5">
+         <select data-role="expsel" onchange="changePaneExpiry(this, event)" title="Expiry month"
+           class="bg-slate-800 border border-slate-700 rounded-md px-1 py-0.5 text-[10px] text-slate-400 focus:outline-none focus:border-indigo-500 max-w-[104px]"></select>
          <button data-role="graphbtn" onclick="togglePaneGraph(this, event)" title="Toggle OI graph"
            class="text-xs px-1.5 py-0.5 rounded border border-slate-700 text-slate-500 hover:text-indigo-400 hover:border-indigo-500 transition">&#128202;</button>
        </div>
