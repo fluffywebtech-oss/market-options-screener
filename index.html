@@ -80,22 +80,10 @@
         </div>
       </div>
     </div>
-    <!-- Quick-add chips -->
-    <div class="flex flex-wrap gap-2 mt-3">
-      <span class="text-[11px] text-slate-600 uppercase tracking-wider self-center mr-1">Quick add:</span>
-      <button onclick="addWatchlistItem('NIFTY')"     class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">NIFTY</button>
-      <button onclick="addWatchlistItem('BANKNIFTY')"  class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">BANKNIFTY</button>
-      <button onclick="addWatchlistItem('FINNIFTY')"   class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">FINNIFTY</button>
-      <button onclick="addWatchlistItem('RELIANCE')"   class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">RELIANCE</button>
-      <button onclick="addWatchlistItem('TCS')"        class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">TCS</button>
-      <button onclick="addWatchlistItem('INFY')"       class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">INFY</button>
-      <button onclick="addWatchlistItem('HDFCBANK')"   class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">HDFCBANK</button>
-      <button onclick="addWatchlistItem('SBIN')"       class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">SBIN</button>
-      <button onclick="addWatchlistItem('TATAMOTORS')" class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">TATAMOTORS</button>
-      <button onclick="addWatchlistItem('ITC')"        class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">ITC</button>
-      <button onclick="addWatchlistItem('ZOMATO')"     class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">ZOMATO</button>
-      <button onclick="addWatchlistItem('CIPLA')"      class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">CIPLA</button>
-      <button onclick="addWatchlistItem('MIDCPNIFTY')" class="qchip bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium px-3 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition cursor-pointer">MIDCPNIFTY</button>
+    <!-- Category tabs + stock chips -->
+    <div class="mt-3">
+      <div id="catTabs" class="flex flex-wrap gap-1.5 mb-2"></div>
+      <div id="catStocks" class="flex flex-wrap gap-1.5 max-h-[160px] overflow-y-auto"></div>
     </div>
   </section>
 
@@ -219,7 +207,7 @@
   <section id="emptyState" class="text-center py-16">
     <div class="text-slate-700 text-6xl mb-4">&#9881;</div>
     <p class="text-slate-500 text-sm">Add stocks above to start monitoring</p>
-    <p class="text-slate-600 text-xs mt-1">Click any quick-add chip or type a symbol</p>
+    <p class="text-slate-600 text-xs mt-1">Pick a category above and click any stock, or type a symbol</p>
   </section>
 </div>
 
@@ -1413,23 +1401,50 @@ function resetCustomStrikes() {
   renderDetail();
 }
 
-// ========================= CHIP HIGHLIGHTING =========================
-function highlightChip(sym) {
-  document.querySelectorAll('.qchip').forEach(btn => {
-    if (btn.textContent.trim() === sym) {
-      btn.classList.remove('bg-slate-800','text-slate-400','border-slate-700');
-      btn.classList.add('bg-indigo-600/20','border-indigo-500/50','text-indigo-400');
-    }
-  });
+// ========================= STOCK CATEGORIES =========================
+const CATEGORIES = {
+  'Indices':        ['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY','NIFTYNXT50','SENSEX'],
+  'Banking':        ['HDFCBANK','ICICIBANK','SBIN','AXISBANK','KOTAKBANK','BANKBARODA','PNB','INDUSINDBK','FEDERALBNK','IDFCFIRSTB','BANDHANBNK','AUBANK','CANBK','UNIONBANK','INDIANB','BAJFINANCE','BAJAJFINSV','HDFCLIFE','SBILIFE','ICICIPRULI','MUTHOOTFIN','MANAPPURAM','CHOLAFIN','M&MFIN','LICHSGFIN','RECLTD','PFC','SHRIRAMFIN'],
+  'IT & Tech':      ['TCS','INFY','WIPRO','HCLTECH','TECHM','LTIM','MPHASIS','COFORGE','PERSISTENT','LTTS','CYIENT','TATAELXSI','ZOMATO','PAYTM','NAUKRI','POLICYBZR','ROUTE','BIRLASOFT','OFSS','SONATASOFT','INTELLECT','TANLA','MASTEK','ZENSAR','HAPPSTMNDS'],
+  'Pharma':         ['SUNPHARMA','CIPLA','DRREDDY','DIVISLAB','AUROPHARMA','BIOCON','LUPIN','APOLLOHOSP','MAXHEALTH','TORNTPHARM','ZYDUSLIFE','LALPATHLAB','ALKEM','IPCALAB','NATCOPHARMA','LAURUSLABS','GLENMARK','METROPOLIS','ABBOTINDIA','FORTIS','GRANULES','SYNGENE','AJANTPHARM','ASTRAZEN','PFIZER','GLAND'],
+  'Auto':           ['TATAMOTORS','MARUTI','M&M','BAJAJ-AUTO','EICHERMOT','HEROMOTOCO','ASHOKLEY','TVSMOTOR','BALKRISIND','MRF','APOLLOTYRE','MOTHERSON','BOSCHLTD','BHARATFORG','EXIDEIND','TIINDIA','ENDURANCE','SUNDRMFAST','ESCORTS','FORCEMOT','AMARAJABAT','SONACOMS','SWARAJENG','CEATLTD','TATAMTRDVR','OLECTRA'],
+  'Energy':         ['RELIANCE','ONGC','IOC','BPCL','GAIL','NTPC','POWERGRID','ADANIGREEN','ADANIENT','ADANIPORTS','TATAPOWER','NHPC','COALINDIA','PETRONET','HINDPETRO','IGL','MGL','GUJGASLTD','SJVN','TORNTPOWER','CESC','JSWENERGY','IREDA','GSPL','AEGISCHEM'],
+  'Metals':         ['TATASTEEL','JSWSTEEL','HINDALCO','VEDL','SAIL','NMDC','NATIONALUM','JINDALSTEL','APLAPOLLO','RATNAMANI','WELCORP','MOIL','HINDZINC'],
+  'FMCG':           ['ITC','HINDUNILVR','NESTLEIND','BRITANNIA','GODREJCP','DABUR','MARICO','COLPAL','TATACONSUM','EMAMILTD','PIDILITIND','UNITDSPR','VGUARD','PGHH','BATAINDIA','JUBLFOOD','DMART','TRENT','TITAN','PAGEIND','MANYAVAR','RELAXO','VBL','JYOTHYLAB','RADICO','UBL'],
+  'Infra':          ['LT','ULTRACEMCO','SHREECEM','AMBUJACEM','ACC','DALBHARAT','RAMCOCEM','JKCEMENT','IRCON','NBCC','NCC','BEL','HAL','GRASIM','SIEMENS','ABB','CUMMINSIND','THERMAX','HAVELLS','VOLTAS','BLUESTARLT','CROMPTON','DIXON','KAYNES','AFFLE'],
+  'Telecom':        ['BHARTIARTL','IDEA','TATACOMM','HATHWAY','NAZARA','NETWEB'],
+};
+let activeCat = 'Indices';
+
+function renderCategories() {
+  const tabsEl = document.getElementById('catTabs');
+  const stocksEl = document.getElementById('catStocks');
+  tabsEl.innerHTML = Object.keys(CATEGORIES).map(cat =>
+    `<button onclick="selectCategory('${cat}')"
+       class="cat-tab text-[11px] font-semibold px-3 py-1.5 rounded-full border transition cursor-pointer
+       ${cat === activeCat
+         ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-400'
+         : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white'}">${cat}</button>`
+  ).join('');
+
+  const syms = CATEGORIES[activeCat] || [];
+  stocksEl.innerHTML = syms.map(sym => {
+    const inWL = watchlist.has(sym);
+    return `<button onclick="addWatchlistItem('${sym}')"
+      class="qchip text-[11px] font-medium px-2.5 py-1 rounded-full border transition cursor-pointer
+      ${inWL
+        ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-400'
+        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white'}">${sym}</button>`;
+  }).join('');
 }
-function unhighlightChip(sym) {
-  document.querySelectorAll('.qchip').forEach(btn => {
-    if (btn.textContent.trim() === sym) {
-      btn.classList.remove('bg-indigo-600/20','border-indigo-500/50','text-indigo-400');
-      btn.classList.add('bg-slate-800','text-slate-400','border-slate-700');
-    }
-  });
+
+function selectCategory(cat) {
+  activeCat = cat;
+  renderCategories();
 }
+
+function highlightChip(sym) { renderCategories(); }
+function unhighlightChip(sym) { renderCategories(); }
 
 // ========================= SEARCH INPUT =========================
 document.getElementById('searchInput').addEventListener('keydown', e => {
@@ -1438,6 +1453,7 @@ document.getElementById('searchInput').addEventListener('keydown', e => {
 
 // ========================= INIT =========================
 const restored = loadState();   // bring back the saved watchlist + view settings
+renderCategories();
 renderCards();
 updateViewToolbar();
 // A live API is always reachable now (relative when deployed, PROD_API when
